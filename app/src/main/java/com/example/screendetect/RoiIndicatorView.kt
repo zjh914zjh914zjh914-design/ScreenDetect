@@ -4,12 +4,13 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Rect
 import android.view.View
+import org.opencv.core.Rect
 
 /**
  * 监控运行时悬浮显示的检测区域指示窗（不可触摸、不遮挡操作）。
  * 平时显示区域边框与当前阈值；报警时闪烁并显示本次变化数值与阈值。
+ * 使用 OpenCV 的 Rect（x/y/width/height），与监控服务的检测区域类型一致。
  */
 class RoiIndicatorView(context: Context) : View(context) {
 
@@ -62,11 +63,15 @@ class RoiIndicatorView(context: Context) : View(context) {
             if (flashing) Color.argb(70, 255, 45, 45) else Color.argb(35, 255, 179, 0)
 
         val r = roiRect
-        canvas.drawRect(r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), fillPaint)
-        canvas.drawRect(r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), borderPaint)
+        val left = r.x.toFloat()
+        val top = r.y.toFloat()
+        val right = (r.x + r.width).toFloat()
+        val bottom = (r.y + r.height).toFloat()
+        canvas.drawRect(left, top, right, bottom, fillPaint)
+        canvas.drawRect(left, top, right, bottom, borderPaint)
 
-        val cx = (r.left + r.right) / 2f
-        val cy = (r.top + r.bottom) / 2f
+        val cx = r.x + r.width / 2f
+        val cy = r.y + r.height / 2f
         if (flashing) {
             canvas.drawText("报警！检测到画面变化", cx, cy - 6f, textPaint)
             canvas.drawText(
