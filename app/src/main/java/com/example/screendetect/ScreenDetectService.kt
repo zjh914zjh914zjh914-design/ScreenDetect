@@ -114,9 +114,13 @@ class ScreenDetectService : Service() {
             prefs.getInt("h", roiRect.height)
         )
 
-        // MOG2 初始化（native 库加载失败时降级为不检测，避免崩溃）
+        // MOG2 初始化：必须先显式加载 OpenCV native 库（不加载会闪退），失败则降级为不检测
         mog2 = try {
-            Video.createBackgroundSubtractorMOG2(500, 16.0, true)
+            if (OpenCVLoader.initLocal()) {
+                Video.createBackgroundSubtractorMOG2(500, 16.0, true)
+            } else {
+                null
+            }
         } catch (e: Throwable) {
             null
         }
@@ -186,7 +190,7 @@ class ScreenDetectService : Service() {
                 mHandler?.post {
                     try {
                         processFrame(img)
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         // 单帧处理失败不中断监控
                     } finally {
                         img.close()
