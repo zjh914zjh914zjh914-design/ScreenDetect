@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.ScreenDetect" parent="Theme.AppCompat.Light.DarkActionBar">
+        <item name="colorPrimary">@color/ic_launcher_background</item>
+        <item name="colorPrimaryDark">#1565C0</item>
+        <item name="colorAccent">#FF7043</item>
+    </style>
+</resources>
