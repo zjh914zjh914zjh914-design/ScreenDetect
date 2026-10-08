@@ -19,6 +19,21 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // CI 里由 keytool 生成 release.keystore 后自动签名；本地无此文件时不签名
+            if (file('release.keystore').exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    signingConfigs {
+        release {
+            if (file('release.keystore').exists()) {
+                storeFile file('release.keystore')
+                storePassword 'screendetect'
+                keyAlias 'screendetect'
+                keyPassword 'screendetect'
+            }
         }
     }
 
