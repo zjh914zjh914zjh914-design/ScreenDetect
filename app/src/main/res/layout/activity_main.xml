@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:id="@+id/tvSensitivity"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="灵敏度阈值：8000"
+            android:textSize="18sp" />
+
+        <SeekBar
+            android:id="@+id/seekSensitivity"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:max="30000"
+            android:min="1000"
+            android:progress="8000" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="数值越小越灵敏；监控运行中拖动立即生效"
+            android:textColor="#888888"
+            android:textSize="12sp" />
+
+        <CheckBox
+            android:id="@+id/cbSound"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="声音提醒"
+            android:textSize="16sp" />
+
+        <CheckBox
+            android:id="@+id/cbVibration"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="震动提醒"
+            android:textSize="16sp" />
+
+        <CheckBox
+            android:id="@+id/cbShowRoi"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="监控时显示检测区域（含报警信息）"
+            android:textSize="16sp" />
+
+        <Button
+            android:id="@+id/btnStart"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="开始屏幕监控" />
+
+        <Button
+            android:id="@+id/btnStop"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="停止监控" />
+
+        <Button
+            android:id="@+id/btnSetRoi"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="设置检测区域（框选）" />
+
+        <TextView
+            android:id="@+id/tvMotionValue"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="#F0F0F0"
+            android:padding="12dp"
+            android:text="实时变化值：--\n当前阈值：--（峰值：--）\n报警次数：0"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/tvLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="#F0F0F0"
+            android:padding="12dp"
+            android:text="暂无报警记录"
+            android:textSize="13sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="提醒：锁屏会中断监控，请保持亮屏并关闭电池优化"
+            android:textColor="#888888"
+            android:textSize="12sp" />
+
+    </LinearLayout>
+</ScrollView>
