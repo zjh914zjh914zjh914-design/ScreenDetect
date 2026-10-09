@@ -32,6 +32,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cbSound: CheckBox
     private lateinit var cbVibration: CheckBox
     private lateinit var cbShowRoi: CheckBox
+    private lateinit var tvInterval: TextView
+    private lateinit var tvPause: TextView
+    private lateinit var seekInterval: SeekBar
+    private lateinit var seekPause: SeekBar
 
     /** 接收 Service 每秒广播的实时变化数值，刷新调试面板 */
     private val motionReceiver = object : BroadcastReceiver() {
@@ -65,6 +69,10 @@ class MainActivity : AppCompatActivity() {
         val btnStart = findViewById<Button>(R.id.btnStart)
         val btnStop = findViewById<Button>(R.id.btnStop)
         val btnSetRoi = findViewById<Button>(R.id.btnSetRoi)
+        tvInterval = findViewById(R.id.tvInterval)
+        tvPause = findViewById(R.id.tvPause)
+        seekInterval = findViewById(R.id.seekInterval)
+        seekPause = findViewById(R.id.seekPause)
 
         tvSensitivity.text = "灵敏度阈值：${seekSensitivity.progress}"
 
@@ -87,6 +95,38 @@ class MainActivity : AppCompatActivity() {
             settings.edit().putBoolean(ScreenDetectService.EXTRA_SHOW_ROI, checked).apply()
             sendSettings()
         }
+
+        // 检测间隔：1~10 秒（滑块进度 0 = 1 秒）
+        seekInterval.progress =
+            (settings.getInt(ScreenDetectService.EXTRA_DETECT_INTERVAL, 1000) / 1000 - 1).coerceIn(0, 9)
+        tvInterval.text = "检测间隔：${seekInterval.progress + 1} 秒"
+        seekInterval.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val sec = progress + 1
+                tvInterval.text = "检测间隔：$sec 秒"
+                settings.edit().putInt(ScreenDetectService.EXTRA_DETECT_INTERVAL, sec * 1000).apply()
+                sendSettings()
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        // 报警后暂停：3~30 秒（滑块进度 0 = 3 秒）
+        seekPause.progress =
+            (settings.getInt(ScreenDetectService.EXTRA_ALARM_PAUSE, 10000) / 1000 - 3).coerceIn(0, 27)
+        tvPause.text = "报警后暂停：${seekPause.progress + 3} 秒"
+        seekPause.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val sec = progress + 3
+                tvPause.text = "报警后暂停：$sec 秒"
+                settings.edit().putInt(ScreenDetectService.EXTRA_ALARM_PAUSE, sec * 1000).apply()
+                sendSettings()
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
 
         // 灵敏度滑块：监控运行中拖动也会实时生效
         seekSensitivity.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -163,13 +203,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 把声音/震动/区域显示开关实时同步给监控服务 */
+    /** 把声音/震动/区域显示/检测节奏开关实时同步给监控服务 */
     private fun sendSettings() {
         val intent = Intent(this, ScreenDetectService::class.java).apply {
             action = ScreenDetectService.ACTION_UPDATE_SETTINGS
             putExtra(ScreenDetectService.EXTRA_SOUND, cbSound.isChecked)
             putExtra(ScreenDetectService.EXTRA_VIBRATION, cbVibration.isChecked)
             putExtra(ScreenDetectService.EXTRA_SHOW_ROI, cbShowRoi.isChecked)
+            putExtra(ScreenDetectService.EXTRA_DETECT_INTERVAL, (seekInterval.progress + 1) * 1000)
+            putExtra(ScreenDetectService.EXTRA_ALARM_PAUSE, (seekPause.progress + 3) * 1000)
         }
         startService(intent)
     }

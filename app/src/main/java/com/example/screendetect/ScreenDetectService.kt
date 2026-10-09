@@ -20,6 +20,7 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.Settings
 import android.util.DisplayMetrics
+import android.view.Gravity
 import android.view.Surface
 import android.view.WindowManager
 import android.media.ImageReader
@@ -54,6 +55,11 @@ class ScreenDetectService : Service() {
     private val cooldownMs = 3000L             // 报警冷却，避免连续狂响
     private var continuousMotionCount = 0
     private var lastAlarmTs = 0L
+    // ================== 检测节奏（App 内可调） ==================
+    private var detectIntervalMs = 1000L       // 检测间隔：多久对比一次画面
+    private var alarmPauseMs = 10_000L         // 报警后暂停：期间不检测也不报警
+    private var lastDetectTs = 0L
+    private var monitorPauseUntil = 0L
 
     // ================== 提醒设置（App 内可勾选开关） ==================
     private var soundEnabled = true
@@ -94,6 +100,8 @@ class ScreenDetectService : Service() {
         const val EXTRA_SOUND = "sound_enabled"
         const val EXTRA_VIBRATION = "vibration_enabled"
         const val EXTRA_SHOW_ROI = "show_roi_overlay"
+        const val EXTRA_DETECT_INTERVAL = "detect_interval_ms"
+        const val EXTRA_ALARM_PAUSE = "alarm_pause_ms"
         const val START_DELAY_MS = 10_000L   // 启动后延迟 10 秒再开始检测/报警
         const val EXTRA_MOTION_VALUE = "motion_value"
         const val EXTRA_PEAK_VALUE = "peak_value"
@@ -114,6 +122,8 @@ class ScreenDetectService : Service() {
         soundEnabled = settings.getBoolean(EXTRA_SOUND, true)
         vibrationEnabled = settings.getBoolean(EXTRA_VIBRATION, true)
         showRoiOverlay = settings.getBoolean(EXTRA_SHOW_ROI, true)
+        detectIntervalMs = settings.getInt(EXTRA_DETECT_INTERVAL, 1000).toLong()
+        alarmPauseMs = settings.getInt(EXTRA_ALARM_PAUSE, 10000).toLong()
 
         val prefs = getSharedPreferences(PREFS_ROI, MODE_PRIVATE)
         roiRect = Rect(
@@ -148,7 +158,7 @@ class ScreenDetectService : Service() {
             // 运行时从 UI 实时更新灵敏度阈值
             ACTION_UPDATE_THRESHOLD -> {
                 motionAreaThreshold = i.getDoubleExtra(EXTRA_THRESHOLD, motionAreaThreshold)
-                roiIndicator?.refresh(roiRect, motionAreaThreshold)
+                roiIndicator?.refresh(motionAreaThreshold)
                 return START_NOT_STICKY
             }
             // 运行时从 UI 实时更新检测区域（App 内框选保存后触发）
@@ -159,14 +169,17 @@ class ScreenDetectService : Service() {
                     i.getIntExtra(EXTRA_ROI_W, roiRect.width),
                     i.getIntExtra(EXTRA_ROI_H, roiRect.height)
                 )
-                roiIndicator?.refresh(roiRect, motionAreaThreshold)
+                updateRoiWindow()
+                roiIndicator?.refresh(motionAreaThreshold)
                 return START_NOT_STICKY
             }
-            // 运行时从 UI 实时更新声音/震动/区域显示开关
+            // 运行时从 UI 实时更新声音/震动/区域显示/检测节奏开关
             ACTION_UPDATE_SETTINGS -> {
                 soundEnabled = i.getBooleanExtra(EXTRA_SOUND, soundEnabled)
                 vibrationEnabled = i.getBooleanExtra(EXTRA_VIBRATION, vibrationEnabled)
                 showRoiOverlay = i.getBooleanExtra(EXTRA_SHOW_ROI, showRoiOverlay)
+                detectIntervalMs = i.getIntExtra(EXTRA_DETECT_INTERVAL, detectIntervalMs.toInt()).toLong()
+                alarmPauseMs = i.getIntExtra(EXTRA_ALARM_PAUSE, alarmPauseMs.toInt()).toLong()
                 if (showRoiOverlay) showRoiWindow() else hideRoiWindow()
                 return START_NOT_STICKY
             }
@@ -240,27 +253,46 @@ class ScreenDetectService : Service() {
             .notify(1001, buildNotification())
     }
 
-    /** 显示检测区域指示窗（需悬浮窗权限，失败静默跳过不影响监控） */
+    /** 显示检测区域指示窗（局部窗口：只覆盖检测区域，不挡屏幕操作；需悬浮窗权限，失败静默跳过） */
     private fun showRoiWindow() {
         if (!showRoiOverlay || !Settings.canDrawOverlays(this)) return
         try {
             if (roiIndicator == null) {
                 overlayWindowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
                 val view = RoiIndicatorView(this)
-                val params = WindowManager.LayoutParams(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-                    PixelFormat.TRANSLUCENT
-                )
-                overlayWindowManager?.addView(view, params)
+                overlayWindowManager?.addView(view, buildRoiParams())
                 roiIndicator = view
             }
-            roiIndicator?.refresh(roiRect, motionAreaThreshold)
+            roiIndicator?.refresh(motionAreaThreshold)
         } catch (e: Throwable) {
             // 悬浮窗权限异常时静默跳过，不影响监控
+        }
+    }
+
+    /** 按当前检测区域生成指示窗布局参数（小窗口 + 不可触摸 + 不抢焦点，触摸完全穿透） */
+    private fun buildRoiParams(): WindowManager.LayoutParams =
+        WindowManager.LayoutParams(
+            roiRect.width,
+            roiRect.height,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            x = roiRect.x
+            y = roiRect.y
+            gravity = Gravity.TOP or Gravity.START
+        }
+
+    /** 检测区域变化时让指示窗跟随移动/缩放 */
+    private fun updateRoiWindow() {
+        try {
+            roiIndicator?.let { view ->
+                overlayWindowManager?.updateViewLayout(view, buildRoiParams())
+            }
+        } catch (e: Throwable) {
+            // 更新失败不影响监控
         }
     }
 
@@ -275,6 +307,12 @@ class ScreenDetectService : Service() {
     }
 
     private fun processFrame(image: android.media.Image) {
+        // 检测节奏控制：报警后暂停期内不检测；未到检测间隔也不检测
+        val frameNow = System.currentTimeMillis()
+        if (frameNow < monitorPauseUntil) return
+        if (frameNow - lastDetectTs < detectIntervalMs) return
+        lastDetectTs = frameNow
+
         val planes = image.planes
         val buffer = planes[0].buffer
         val pixelStride = planes[0].pixelStride
@@ -381,6 +419,8 @@ class ScreenDetectService : Service() {
         appendLog(motionValue)
         // 检测区域指示窗报警闪烁，显示本次数值与阈值
         roiIndicator?.onAlarm(motionValue, motionAreaThreshold)
+        // 报警后暂停监测一段时间（期间不检测也不报警），秒数可在 App 内调节
+        monitorPauseUntil = System.currentTimeMillis() + alarmPauseMs
 
         if (soundEnabled) {
             mHandler?.post {

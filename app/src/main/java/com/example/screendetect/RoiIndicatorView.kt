@@ -5,16 +5,14 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.view.View
-import org.opencv.core.Rect
 
 /**
  * 监控运行时悬浮显示的检测区域指示窗（不可触摸、不遮挡操作）。
- * 平时显示区域边框与当前阈值；报警时闪烁并显示本次变化数值与阈值。
- * 使用 OpenCV 的 Rect（x/y/width/height），与监控服务的检测区域类型一致。
+ * 窗口尺寸/位置由 Service 按检测区域设置；报警时闪烁并显示本次数值与阈值，
+ * 闪烁 2 秒后自动恢复常态（内部定时重绘，不会卡在红色）。
  */
 class RoiIndicatorView(context: Context) : View(context) {
 
-    var roiRect = Rect(100, 200, 800, 600)
     var threshold = 8000.0
     var lastMotionValue = 0.0
     private var alarmFlashUntil = 0L
@@ -40,19 +38,36 @@ class RoiIndicatorView(context: Context) : View(context) {
         textAlign = Paint.Align.CENTER
     }
 
-    /** 报警时调用：记录本次数值，闪烁 2 秒展示阈值信息 */
+    /** 闪烁循环：持续重绘直到闪烁结束，最后一次重绘恢复常态颜色 */
+    private val flashRunnable = object : Runnable {
+        override fun run() {
+            if (System.currentTimeMillis() < alarmFlashUntil) {
+                invalidate()
+                postDelayed(this, 150)
+            } else {
+                invalidate()
+            }
+        }
+    }
+
+    /** 报警时调用：记录本次数值，闪烁 2 秒展示阈值信息后自动恢复 */
     fun onAlarm(motionValue: Double, threshold: Double) {
         lastMotionValue = motionValue
         this.threshold = threshold
         alarmFlashUntil = System.currentTimeMillis() + 2000
+        removeCallbacks(flashRunnable)
+        post(flashRunnable)
+    }
+
+    /** 阈值变化时刷新显示 */
+    fun refresh(threshold: Double) {
+        this.threshold = threshold
         invalidate()
     }
 
-    /** ROI / 阈值变化时刷新显示 */
-    fun refresh(roi: Rect, threshold: Double) {
-        roiRect = roi
-        this.threshold = threshold
-        invalidate()
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        removeCallbacks(flashRunnable)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -62,16 +77,13 @@ class RoiIndicatorView(context: Context) : View(context) {
         fillPaint.color =
             if (flashing) Color.argb(70, 255, 45, 45) else Color.argb(35, 255, 179, 0)
 
-        val r = roiRect
-        val left = r.x.toFloat()
-        val top = r.y.toFloat()
-        val right = (r.x + r.width).toFloat()
-        val bottom = (r.y + r.height).toFloat()
-        canvas.drawRect(left, top, right, bottom, fillPaint)
-        canvas.drawRect(left, top, right, bottom, borderPaint)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        canvas.drawRect(0f, 0f, w, h, fillPaint)
+        canvas.drawRect(0f, 0f, w, h, borderPaint)
 
-        val cx = r.x + r.width / 2f
-        val cy = r.y + r.height / 2f
+        val cx = w / 2f
+        val cy = h / 2f
         if (flashing) {
             canvas.drawText("报警！检测到画面变化", cx, cy - 6f, textPaint)
             canvas.drawText(
