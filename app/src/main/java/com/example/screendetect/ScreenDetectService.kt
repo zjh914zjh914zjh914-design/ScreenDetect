@@ -65,6 +65,7 @@ class ScreenDetectService : Service() {
     private var alarmPauseMs = 10_000L         // 报警后暂停：期间不检测也不报警
     private var lastDetectTs = 0L
     private var monitorPauseUntil = 0L
+    private var relearnUntil = 0L   // 报警刚结束后的短暂学习期（期间只更新背景不报警）
 
     // ================== 提醒设置（App 内可勾选开关） ==================
     private var soundEnabled = true
@@ -136,7 +137,7 @@ class ScreenDetectService : Service() {
             prefs.getInt("w", naturalRoiRect.width),
             prefs.getInt("h", naturalRoiRect.height)
         )
-        roiRect = Rect(naturalRoiRect)
+        roiRect = Rect(naturalRoiRect.x, naturalRoiRect.y, naturalRoiRect.width, naturalRoiRect.height)
 
         // MOG2 初始化：必须先显式加载 OpenCV native 库（不加载会闪退），失败则降级为不检测
         mog2 = try {
@@ -317,7 +318,7 @@ class ScreenDetectService : Service() {
     /** 按当前屏幕方向把竖屏标准区域换算成运行坐标，并让指示窗跟随移动 */
     private fun refreshCurrentRoi() {
         if (curScreenW <= 0 || curScreenH <= 0) {
-            roiRect = Rect(naturalRoiRect)
+            roiRect = Rect(naturalRoiRect.x, naturalRoiRect.y, naturalRoiRect.width, naturalRoiRect.height)
             return
         }
         val rot = (getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.rotation
@@ -335,11 +336,10 @@ class ScreenDetectService : Service() {
     }
 
     private fun processFrame(image: android.media.Image) {
-        // 检测节奏控制：报警后暂停期内不检测；未到检测间隔也不检测
+        // 检测节奏控制：未到检测间隔且不在暂停期则完全跳过；
+        // 处于报警后暂停期时仍需处理本帧（用于持续更新背景模型，见下方分支）
         val frameNow = System.currentTimeMillis()
-        if (frameNow < monitorPauseUntil) return
-        if (frameNow - lastDetectTs < detectIntervalMs) return
-        lastDetectTs = frameNow
+        if (frameNow >= monitorPauseUntil && frameNow - lastDetectTs < detectIntervalMs) return
 
         // 屏幕方向变化时自动换算检测区域并移动指示窗（跟随同一物理位置）
         val rot = (getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.rotation
@@ -383,6 +383,19 @@ class ScreenDetectService : Service() {
         Imgproc.cvtColor(roiMat, gray, Imgproc.COLOR_RGBA2GRAY)
         Imgproc.GaussianBlur(gray, gray, Size(5.0, 5.0), 0.0)
 
+        // 报警后暂停期内：不检测不报警，但持续把最新帧喂给 MOG2 更新背景模型。
+        // 若不更新，暂停期间背景被"冻结"，恢复后静止画面与旧背景对比会一直被误判为变化而连环报警
+        if (frameNow < monitorPauseUntil) {
+            val fg = Mat()
+            mog2?.apply(gray, fg)
+            fg.release()
+            mat.release()
+            roiMat.release()
+            gray.release()
+            return
+        }
+        lastDetectTs = frameNow
+
         // MOG2 前景掩码
         val fgMask = Mat()
         mog2?.apply(gray, fgMask)
@@ -399,14 +412,19 @@ class ScreenDetectService : Service() {
         if (motionValue > maxMotionValue) maxMotionValue = motionValue
 
         if (motionValue > motionAreaThreshold) {
-            continuousMotionCount++
-            if (continuousMotionCount >= requiredContFrame) {
-                val now = System.currentTimeMillis()
-                if (now - lastAlarmTs > cooldownMs) {
-                    triggerAlarm(motionValue)
-                    lastAlarmTs = now
-                }
+            // 报警刚结束后的短暂学习期内只更新背景不报警，彻底消化残余前景，避免连环误报
+            if (frameNow < relearnUntil) {
                 continuousMotionCount = 0
+            } else {
+                continuousMotionCount++
+                if (continuousMotionCount >= requiredContFrame) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastAlarmTs > cooldownMs) {
+                        triggerAlarm(motionValue)
+                        lastAlarmTs = now
+                    }
+                    continuousMotionCount = 0
+                }
             }
         } else {
             continuousMotionCount = 0
@@ -437,8 +455,10 @@ class ScreenDetectService : Service() {
         appendLog(motionValue)
         // 检测区域指示窗报警闪烁，显示本次数值与阈值
         roiIndicator?.onAlarm(motionValue, motionAreaThreshold)
-        // 报警后暂停监测一段时间（期间不检测也不报警），秒数可在 App 内调节
+        // 报警后暂停监测一段时间（期间不检测也不报警，持续更新背景），秒数可在 App 内调节
         monitorPauseUntil = System.currentTimeMillis() + alarmPauseMs
+        // 暂停结束后 3 秒内只学习背景不报警，防止恢复瞬间残余前景导致连环误报
+        relearnUntil = System.currentTimeMillis() + 3000L
 
         if (soundEnabled) {
             mHandler?.post {
