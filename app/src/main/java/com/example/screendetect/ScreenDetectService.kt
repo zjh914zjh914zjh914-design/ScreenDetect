@@ -21,7 +21,6 @@ import android.os.VibratorManager
 import android.provider.Settings
 import android.util.DisplayMetrics
 import android.view.Gravity
-import android.view.Surface
 import android.view.WindowManager
 import android.media.ImageReader
 import org.opencv.android.OpenCVLoader
@@ -77,7 +76,6 @@ class ScreenDetectService : Service() {
     private var handlerThread: HandlerThread? = null
     private var mHandler: Handler? = null
     private var mediaPlayer: MediaPlayer? = null
-    private var rotation = 0
     // ================== 启动延迟与 ROI 指示窗 ==================
     private var showRoiOverlay = true      // 监控时显示检测区域指示窗（App 内可勾选）
     private var startPending = false       // 是否在 10 秒延迟等待中
@@ -218,8 +216,6 @@ class ScreenDetectService : Service() {
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         wm.defaultDisplay.getMetrics(metrics)
-        @Suppress("DEPRECATION")
-        rotation = wm.defaultDisplay.rotation
         val screenW = metrics.widthPixels
         val screenH = metrics.heightPixels
 
@@ -338,28 +334,15 @@ class ScreenDetectService : Service() {
         val mat = Mat(h, w, CvType.CV_8UC4)
         mat.put(0, 0, data)
 
-        // 按屏幕方向旋转到自然方向（横屏使用不会错位）
-        val rotated = Mat()
-        when (rotation) {
-            Surface.ROTATION_90 -> Core.rotate(mat, rotated, Core.ROTATE_90_CLOCKWISE)
-            Surface.ROTATION_180 -> Core.rotate(mat, rotated, Core.ROTATE_180)
-            Surface.ROTATION_270 -> Core.rotate(mat, rotated, Core.ROTATE_90_COUNTERCLOCKWISE)
-            else -> mat.copyTo(rotated)
-        }
-        if (rotated.empty()) {
-            mat.release()
-            rotated.release()
-            return
-        }
-
+        // 直接使用采集帧方向检测（与框选/指示窗同坐标系，横竖屏均一致）
         // ROI 边界保护（防止矩形超出画面导致崩溃）
-        val x = roiRect.x.coerceIn(0, rotated.cols() - 1)
-        val y = roiRect.y.coerceIn(0, rotated.rows() - 1)
-        val rw = roiRect.width.coerceAtMost(rotated.cols() - x)
-        val rh = roiRect.height.coerceAtMost(rotated.rows() - y)
+        val x = roiRect.x.coerceIn(0, mat.cols() - 1)
+        val y = roiRect.y.coerceIn(0, mat.rows() - 1)
+        val rw = roiRect.width.coerceAtMost(mat.cols() - x)
+        val rh = roiRect.height.coerceAtMost(mat.rows() - y)
         val safeRoi = Rect(x, y, rw, rh)
 
-        val roiMat = rotated.submat(safeRoi)
+        val roiMat = mat.submat(safeRoi)
         val gray = Mat()
         Imgproc.cvtColor(roiMat, gray, Imgproc.COLOR_RGBA2GRAY)
         Imgproc.GaussianBlur(gray, gray, Size(5.0, 5.0), 0.0)
@@ -408,7 +391,6 @@ class ScreenDetectService : Service() {
         }
 
         mat.release()
-        rotated.release()
         roiMat.release()
         gray.release()
         fgMask.release()
