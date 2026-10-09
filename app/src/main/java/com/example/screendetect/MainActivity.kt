@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.Surface
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
@@ -228,16 +229,35 @@ class MainActivity : AppCompatActivity() {
     private fun showRoiOverlay() {
         if (roiOverlay != null) return
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        @Suppress("DEPRECATION")
+        val rotation = wm.defaultDisplay.rotation
         val metrics = resources.displayMetrics
 
-        // 读取上次保存的区域作为初始位置
+        // 读取上次保存的区域（竖屏标准坐标）作为初始位置，按当前方向换算显示
         val prefs = getSharedPreferences(PREFS_ROI, MODE_PRIVATE)
-        val initial = Rect(
-            prefs.getInt("x", metrics.widthPixels / 4),
-            prefs.getInt("y", metrics.heightPixels / 4),
-            prefs.getInt("x", metrics.widthPixels / 4) + prefs.getInt("w", metrics.widthPixels / 2),
-            prefs.getInt("y", metrics.heightPixels / 4) + prefs.getInt("h", metrics.heightPixels / 2)
+        val hasSaved = prefs.contains("x")
+        val naturalDefault = Rect(
+            metrics.widthPixels / 4,
+            metrics.heightPixels / 4,
+            metrics.widthPixels / 4 + metrics.widthPixels / 2,
+            metrics.heightPixels / 4 + metrics.heightPixels / 2
         )
+        val natural = if (hasSaved) {
+            Rect(
+                prefs.getInt("x", naturalDefault.left),
+                prefs.getInt("y", naturalDefault.top),
+                prefs.getInt("x", naturalDefault.left) + prefs.getInt("w", naturalDefault.width()),
+                prefs.getInt("y", naturalDefault.top) + prefs.getInt("h", naturalDefault.height())
+            )
+        } else {
+            naturalDefault
+        }
+        // 有保存值时把竖屏标准坐标换算到当前方向；无保存值直接给当前方向的默认区域
+        val initial = if (hasSaved) {
+            mapNaturalToCurrent(natural, rotation, metrics.widthPixels, metrics.heightPixels)
+        } else {
+            natural
+        }
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -254,8 +274,10 @@ class MainActivity : AppCompatActivity() {
             metrics.heightPixels,
             initial,
             onSave = { rect ->
-                saveRoiToPrefs(rect)
-                sendRoiToService(rect)
+                // 任意方向框选都换算成竖屏标准坐标保存，横竖屏自动跟随同一物理位置
+                val naturalRoi = mapCurrentToNatural(rect, rotation, metrics.widthPixels, metrics.heightPixels)
+                saveRoiToPrefs(naturalRoi)
+                sendRoiToService(naturalRoi)
                 roiOverlay?.let { wm.removeView(it) }
                 roiOverlay = null
                 Toast.makeText(this, "检测区域已更新", Toast.LENGTH_SHORT).show()
@@ -267,6 +289,46 @@ class MainActivity : AppCompatActivity() {
         )
         wm.addView(overlay, params)
         roiOverlay = overlay
+    }
+
+    /** 竖屏标准坐标 -> 当前方向坐标（android.graphics.Rect 为 left/top/right/bottom；curW 为当前方向宽） */
+    private fun mapNaturalToCurrent(roi: Rect, rotation: Int, curW: Int, curH: Int): Rect = when (rotation) {
+        Surface.ROTATION_90 -> {
+            val l = roi.top
+            val t = curW - roi.left - roi.width()
+            Rect(l, t, l + roi.height(), t + roi.width())
+        }
+        Surface.ROTATION_180 -> {
+            val l = curW - roi.left - roi.width()
+            val t = curH - roi.top - roi.height()
+            Rect(l, t, l + roi.width(), t + roi.height())
+        }
+        Surface.ROTATION_270 -> {
+            val l = curW - roi.top - roi.height()
+            val t = roi.left
+            Rect(l, t, l + roi.height(), t + roi.width())
+        }
+        else -> Rect(roi.left, roi.top, roi.right, roi.bottom)
+    }
+
+    /** 当前方向坐标 -> 竖屏标准坐标 */
+    private fun mapCurrentToNatural(roi: Rect, rotation: Int, curW: Int, curH: Int): Rect = when (rotation) {
+        Surface.ROTATION_90 -> {
+            val l = curW - roi.top - roi.height()
+            val t = roi.left
+            Rect(l, t, l + roi.height(), t + roi.width())
+        }
+        Surface.ROTATION_180 -> {
+            val l = curW - roi.left - roi.width()
+            val t = curH - roi.top - roi.height()
+            Rect(l, t, l + roi.width(), t + roi.height())
+        }
+        Surface.ROTATION_270 -> {
+            val l = roi.top
+            val t = curW - roi.left - roi.width()
+            Rect(l, t, l + roi.height(), t + roi.width())
+        }
+        else -> Rect(roi.left, roi.top, roi.right, roi.bottom)
     }
 
     private fun saveRoiToPrefs(rect: Rect) {

@@ -21,6 +21,7 @@ import android.os.VibratorManager
 import android.provider.Settings
 import android.util.DisplayMetrics
 import android.view.Gravity
+import android.view.Surface
 import android.view.WindowManager
 import android.media.ImageReader
 import org.opencv.android.OpenCVLoader
@@ -44,9 +45,14 @@ import java.util.Locale
  */
 class ScreenDetectService : Service() {
 
-    // ================== ROI 检测区域（屏幕坐标，左上角为原点） ==================
-    // 默认值仅用于首次运行；之后可在 App 内点「设置检测区域」框选并自动保存
+    // ================== ROI 检测区域 ==================
+    // 竖屏标准坐标：用户在竖屏（或任意方向）框选保存的权威值，统一换算成竖屏坐标系存储
+    private var naturalRoiRect = Rect(100, 200, 800, 600)
+    // 当前方向运行坐标：检测与指示窗使用，随屏幕方向自动换算
     private var roiRect = Rect(100, 200, 800, 600)
+    private var curScreenW = 0   // 当前方向屏幕宽（采集帧尺寸）
+    private var curScreenH = 0
+    private var lastRotation = -1
 
     // ================== 检测参数 ==================
     private var motionAreaThreshold = 8000.0   // 运动像素面积阈值，越小越灵敏
@@ -124,12 +130,13 @@ class ScreenDetectService : Service() {
         alarmPauseMs = settings.getInt(EXTRA_ALARM_PAUSE, 10000).toLong()
 
         val prefs = getSharedPreferences(PREFS_ROI, MODE_PRIVATE)
-        roiRect = Rect(
-            prefs.getInt("x", roiRect.x),
-            prefs.getInt("y", roiRect.y),
-            prefs.getInt("w", roiRect.width),
-            prefs.getInt("h", roiRect.height)
+        naturalRoiRect = Rect(
+            prefs.getInt("x", naturalRoiRect.x),
+            prefs.getInt("y", naturalRoiRect.y),
+            prefs.getInt("w", naturalRoiRect.width),
+            prefs.getInt("h", naturalRoiRect.height)
         )
+        roiRect = Rect(naturalRoiRect)
 
         // MOG2 初始化：必须先显式加载 OpenCV native 库（不加载会闪退），失败则降级为不检测
         mog2 = try {
@@ -159,15 +166,15 @@ class ScreenDetectService : Service() {
                 roiIndicator?.refresh(motionAreaThreshold)
                 return START_NOT_STICKY
             }
-            // 运行时从 UI 实时更新检测区域（App 内框选保存后触发）
+            // 运行时从 UI 实时更新检测区域（App 内框选保存后触发，坐标为竖屏标准坐标）
             ACTION_UPDATE_ROI -> {
-                roiRect = Rect(
-                    i.getIntExtra(EXTRA_ROI_X, roiRect.x),
-                    i.getIntExtra(EXTRA_ROI_Y, roiRect.y),
-                    i.getIntExtra(EXTRA_ROI_W, roiRect.width),
-                    i.getIntExtra(EXTRA_ROI_H, roiRect.height)
+                naturalRoiRect = Rect(
+                    i.getIntExtra(EXTRA_ROI_X, naturalRoiRect.x),
+                    i.getIntExtra(EXTRA_ROI_Y, naturalRoiRect.y),
+                    i.getIntExtra(EXTRA_ROI_W, naturalRoiRect.width),
+                    i.getIntExtra(EXTRA_ROI_H, naturalRoiRect.height)
                 )
-                updateRoiWindow()
+                refreshCurrentRoi()
                 roiIndicator?.refresh(motionAreaThreshold)
                 return START_NOT_STICKY
             }
@@ -216,6 +223,11 @@ class ScreenDetectService : Service() {
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         wm.defaultDisplay.getMetrics(metrics)
+        @Suppress("DEPRECATION")
+        lastRotation = wm.defaultDisplay.rotation
+        curScreenW = metrics.widthPixels
+        curScreenH = metrics.heightPixels
+        refreshCurrentRoi()
         val screenW = metrics.widthPixels
         val screenH = metrics.heightPixels
 
@@ -302,12 +314,36 @@ class ScreenDetectService : Service() {
         roiIndicator = null
     }
 
+    /** 按当前屏幕方向把竖屏标准区域换算成运行坐标，并让指示窗跟随移动 */
+    private fun refreshCurrentRoi() {
+        if (curScreenW <= 0 || curScreenH <= 0) {
+            roiRect = Rect(naturalRoiRect)
+            return
+        }
+        val rot = (getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.rotation
+        lastRotation = rot
+        roiRect = mapNaturalToCurrent(naturalRoiRect, rot, curScreenW, curScreenH)
+        updateRoiWindow()
+    }
+
+    /** 竖屏标准坐标 -> 当前方向坐标（OpenCV Rect 参数为 x/y/宽/高；curW 为当前方向宽，横屏时等于竖屏高） */
+    private fun mapNaturalToCurrent(roi: Rect, rotation: Int, curW: Int, curH: Int): Rect = when (rotation) {
+        Surface.ROTATION_90 -> Rect(roi.y, curW - roi.x - roi.width, roi.height, roi.width)
+        Surface.ROTATION_180 -> Rect(curW - roi.x - roi.width, curH - roi.y - roi.height, roi.width, roi.height)
+        Surface.ROTATION_270 -> Rect(curW - roi.y - roi.height, roi.x, roi.height, roi.width)
+        else -> Rect(roi.x, roi.y, roi.width, roi.height)
+    }
+
     private fun processFrame(image: android.media.Image) {
         // 检测节奏控制：报警后暂停期内不检测；未到检测间隔也不检测
         val frameNow = System.currentTimeMillis()
         if (frameNow < monitorPauseUntil) return
         if (frameNow - lastDetectTs < detectIntervalMs) return
         lastDetectTs = frameNow
+
+        // 屏幕方向变化时自动换算检测区域并移动指示窗（跟随同一物理位置）
+        val rot = (getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.rotation
+        if (rot != lastRotation) refreshCurrentRoi()
 
         val planes = image.planes
         val buffer = planes[0].buffer
